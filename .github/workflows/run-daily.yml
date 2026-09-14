@@ -1,20 +1,16 @@
-name: VktoTG
-
-on:
-    push:
-
-env:
-    VK_TOKEN: ${{ secrets.VK_TOKEN }}
-    TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-    TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-
-jobs:
-  VktoTGBot:
-    runs-on: ubuntu-latest
-    steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # Добавляем этот шаг, чтобы явно изолировать среду Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
       - name: Install Dependencies
-        run: python -m pip install requests   
-      - name:  Run App
-        run: python vk_chat_to_tg.py 
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run App
+        run: python vk_chat_to_tg.py
