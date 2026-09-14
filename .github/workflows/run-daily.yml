@@ -1,7 +1,20 @@
+name: VktoTG
+
+on:
+  push:
+
+env:
+  VK_TOKEN: ${{ secrets.VK_TOKEN }}
+  TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+  TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
+jobs:
+  VktoTGBot:
+    runs-on: ubuntu-latest
+    steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Добавляем этот шаг, чтобы явно изолировать среду Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
