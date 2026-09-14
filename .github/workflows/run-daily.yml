@@ -3,7 +3,7 @@ name: VktoTG
 on:
   push:
   schedule:
-      - cron: '*/5 * * * *'
+      - cron: '*/20 * * * *'
 
 env:
   VK_TOKEN: ${{ secrets.VK_TOKEN }}

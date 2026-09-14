@@ -55,6 +55,7 @@ def vk_call(method, **params):
     params.update({"access_token": VK_TOKEN, "v": VK_API_VERSION})
     resp = requests.get(f"https://api.vk.com/method/{method}", params=params, timeout=15).json()
     if "error" in resp:
+        
         raise RuntimeError(f"Ошибка VK API ({method}): {resp['error']}")
     return resp["response"]
 
@@ -67,7 +68,7 @@ def get_messages(count=20):
 def get_sender_name(from_id):
     if from_id in _name_cache:
         return _name_cache[from_id]
-
+    time.sleep(1)
     try:
         if from_id > 0:
             resp = vk_call("users.get", user_ids=from_id)
