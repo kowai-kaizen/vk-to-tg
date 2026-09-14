@@ -13,12 +13,12 @@
 
 Заполните переменные ниже перед запуском.
 """
-from dotenv import load_dotenv
+
 import time
 import json
 import os
 import requests
-
+from dotenv import load_dotenv
 load_dotenv()
 # ---------- НАСТРОЙКИ ----------
 
