@@ -2,6 +2,12 @@ name: VktoTG
 
 on:
     push:
+
+env:
+    VK_TOKEN: ${{ secrets.VK_TOKEN }}
+    TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+    TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
 jobs:
   VktoTGBot:
     runs-on: ubuntu-latest
