@@ -1,7 +1,6 @@
 name: VktoTG
 
 on:
-  push:
   schedule:
       - cron: '*/5 * * * *'
 
