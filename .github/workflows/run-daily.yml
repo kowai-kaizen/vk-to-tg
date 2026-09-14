@@ -8,5 +8,7 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
+      - name: Install Dependencies
+        run: python -m pip install requests   
       - name:  Run App
         run: python vk_chat_to_tg.py 
