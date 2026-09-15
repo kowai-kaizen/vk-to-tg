@@ -1,40 +1,42 @@
 """
-Пересылка сообщений из групповой беседы ВКонтакте в чат/канал Telegram.
+Пересылка НОВЫХ сообщений из групповой беседы ВКонтакте в чат/канал Telegram.
 
-Как это работает:
-  Скрипт раз в POLL_INTERVAL секунд запрашивает историю сообщений беседы
-  (метод messages.getHistory), сравнивает с последним уже отправленным
-  сообщением и пересылает новые в Telegram (текст, фотографии и документы),
-  подписывая, от кого сообщение. Если задан TG_TOPIC_ID, все сообщения
-  отправляются в указанный топик (тему) супергруппы Telegram.
+Версия для запуска по расписанию (cron / GitHub Actions): скрипт делает ОДНУ
+проверку и завершается — сам цикл ожидания обеспечивает cron в workflow, а не
+скрипт. Состояние (id последнего пересланного сообщения) сохраняется в файл
+last_message_id.json, который в GitHub Actions нужно коммитить обратно в
+репозиторий между запусками (см. соответствующий шаг в workflow).
 
 Установка зависимостей:
-    pip install requests --break-system-packages
-
-Заполните переменные ниже перед запуском.
+    pip install requests python-dotenv --break-system-packages
 """
 
-import time
 import json
 import os
-import requests
-from dotenv import load_dotenv
-load_dotenv()
-# ---------- НАСТРОЙКИ ----------
+import time
 
+import requests
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # в GitHub Actions переменные окружения приходят из workflow, .env не нужен
+
+# ---------- НАСТРОЙКИ ----------
 
 VK_PEER_ID = 2000000046                   # peer_id беседы (2000000000 + chat_id)
 VK_API_VERSION = "5.199"
-VK_TOKEN = os.getenv('VK_TOKEN')
+VK_TOKEN = os.getenv("VK_TOKEN")
 
-TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
-TG_CHAT_ID = os.getenv('TG_CHAT_ID')
-TG_TOPIC_ID = 14                         # id топика (темы) в группе; None, если топики не используются
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
+TG_TOPIC_ID = 14                          # id топика (темы) в группе; None, если топики не используются
 
 STATE_FILE = "last_message_id.json"       # тут храним id последнего отправленного сообщения
 
-
 # --------------------------------
+
 _name_cache = {}
 
 
@@ -76,7 +78,6 @@ def get_sender_name(from_id):
             name = resp[0]["name"] if isinstance(resp, list) else resp["groups"][0]["name"]
     except Exception:
         name = f"id{from_id}"
-
     _name_cache[from_id] = name
     return name
 
@@ -93,7 +94,6 @@ def extract_photo_urls(msg):
 
 
 def extract_documents(msg):
-    """Возвращает список (url, имя_файла) для вложений-документов."""
     docs = []
     for att in msg.get("attachments", []):
         if att.get("type") == "doc":
@@ -115,7 +115,6 @@ def _check_tg_response(resp):
 
 
 def _base_data():
-    """Общие параметры для каждого запроса к Telegram: чат + топик (если задан)."""
     data = {"chat_id": TG_CHAT_ID}
     if TG_TOPIC_ID is not None:
         data["message_thread_id"] = TG_TOPIC_ID
@@ -123,14 +122,12 @@ def _base_data():
 
 
 def _download(url, timeout=20):
-    """Скачивает файл по ссылке ВК и возвращает его содержимое (bytes)."""
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
     return resp.content
 
 
 def _post_with_retry(url, data, files, attempts=3, timeout=180):
-    """Отправляет запрос в Telegram с повторными попытками при сетевых сбоях."""
     last_error = None
     for attempt in range(1, attempts + 1):
         try:
@@ -145,23 +142,19 @@ def _post_with_retry(url, data, files, attempts=3, timeout=180):
 def send_to_telegram(sender, text, photo_urls, documents):
     base = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
     caption = f"{sender}:\n{text}" if text.strip() else f"{sender}:"
-    # подпись пишем один раз — к первому вложению или к тексту, если вложений нет
     caption_used = False
 
     if photo_urls:
         if len(photo_urls) == 1:
-            print("Скачиваю фото...", flush=True)
             data = _base_data()
             data.update({"caption": caption})
             files = {"photo": ("photo.jpg", _download(photo_urls[0]))}
-            print("Отправляю фото в Telegram...", flush=True)
             resp = _post_with_retry(f"{base}/sendPhoto", data, files)
             _check_tg_response(resp)
         else:
             media = []
             files = {}
             for i, url in enumerate(photo_urls[:10]):
-                print(f"Скачиваю фото {i + 1}/{len(photo_urls[:10])}...", flush=True)
                 key = f"photo{i}"
                 try:
                     files[key] = (f"{key}.jpg", _download(url))
@@ -172,18 +165,14 @@ def send_to_telegram(sender, text, photo_urls, documents):
                 if i == 0:
                     item["caption"] = caption
                 media.append(item)
-            if not media:
-                print("Ни одно фото не удалось скачать, пропускаю сообщение.", flush=True)
-            else:
+            if media:
                 data = _base_data()
                 data.update({"media": json.dumps(media)})
-                print("Отправляю альбом в Telegram...", flush=True)
                 resp = _post_with_retry(f"{base}/sendMediaGroup", data, files)
                 _check_tg_response(resp)
         caption_used = True
 
     for url, filename in documents:
-        print(f"Скачиваю документ: {filename}...", flush=True)
         data = _base_data()
         if not caption_used:
             data["caption"] = caption
@@ -193,7 +182,6 @@ def send_to_telegram(sender, text, photo_urls, documents):
         except Exception as e:
             print(f"Не удалось скачать документ {filename}: {e}", flush=True)
             continue
-        print(f"Отправляю документ {filename} в Telegram...", flush=True)
         resp = _post_with_retry(f"{base}/sendDocument", data, files)
         _check_tg_response(resp)
 
@@ -207,18 +195,18 @@ def send_to_telegram(sender, text, photo_urls, documents):
 def main():
     print("Проверка новых сообщений VK-беседы...", flush=True)
     last_id = load_last_id()
- 
+
     messages = get_messages(count=20)
     messages.sort(key=lambda m: m["id"])
     print(f"Получено сообщений от VK API: {len(messages)}", flush=True)
- 
+
     if last_id is None:
         if messages:
             last_id = messages[-1]["id"]
             save_last_id(last_id)
             print(f"Инициализация: последнее сообщение #{last_id}, ждём новые...", flush=True)
         return
- 
+
     new_messages = [m for m in messages if m["id"] > last_id]
     for msg in new_messages:
         sender = get_sender_name(msg["from_id"])
@@ -232,9 +220,16 @@ def main():
             print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
         last_id = msg["id"]
         save_last_id(last_id)
-         
+
     if not new_messages:
         print("Новых сообщений нет.", flush=True)
 
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Ошибка: {e}", flush=True)
+        # завершаемся без ошибки — временный сбой (например, flood control)
+        # не должен считаться падением workflow, просто попробуем в следующий раз
+
