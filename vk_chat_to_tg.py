@@ -31,7 +31,6 @@ TG_BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
 TG_CHAT_ID = os.getenv('TG_CHAT_ID')
 TG_TOPIC_ID = 14                         # id топика (темы) в группе; None, если топики не используются
 
-POLL_INTERVAL = 15                        # как часто проверять (в секундах)
 STATE_FILE = "last_message_id.json"       # тут храним id последнего отправленного сообщения
 
 
@@ -55,7 +54,6 @@ def vk_call(method, **params):
     params.update({"access_token": VK_TOKEN, "v": VK_API_VERSION})
     resp = requests.get(f"https://api.vk.com/method/{method}", params=params, timeout=15).json()
     if "error" in resp:
-        
         raise RuntimeError(f"Ошибка VK API ({method}): {resp['error']}")
     return resp["response"]
 
@@ -207,41 +205,36 @@ def send_to_telegram(sender, text, photo_urls, documents):
 
 
 def main():
-    print("Запуск пересылки VK-беседы -> Telegram...", flush=True)
+    print("Проверка новых сообщений VK-беседы...", flush=True)
     last_id = load_last_id()
-
-    while True:
+ 
+    messages = get_messages(count=20)
+    messages.sort(key=lambda m: m["id"])
+    print(f"Получено сообщений от VK API: {len(messages)}", flush=True)
+ 
+    if last_id is None:
+        if messages:
+            last_id = messages[-1]["id"]
+            save_last_id(last_id)
+            print(f"Инициализация: последнее сообщение #{last_id}, ждём новые...", flush=True)
+        return
+ 
+    new_messages = [m for m in messages if m["id"] > last_id]
+    for msg in new_messages:
+        sender = get_sender_name(msg["from_id"])
+        text = msg.get("text", "")
+        photos = extract_photo_urls(msg)
+        documents = extract_documents(msg)
+        print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
         try:
-            messages = get_messages(count=20)
-            messages.sort(key=lambda m: m["id"])  # от старых к новым
-            print(f"Получено сообщений от VK API: {len(messages)}", flush=True)
-
-            if last_id is None:
-                # при первом запуске не пересылаем историю, а запоминаем текущее состояние
-                if messages:
-                    last_id = messages[-1]["id"]
-                    save_last_id(last_id)
-                    print(f"Инициализация: последнее сообщение #{last_id}, ждём новые...", flush=True)
-            else:
-                new_messages = [m for m in messages if m["id"] > last_id]
-                for msg in new_messages:
-                    sender = get_sender_name(msg["from_id"])
-                    text = msg.get("text", "")
-                    photos = extract_photo_urls(msg)
-                    documents = extract_documents(msg)
-                    print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
-                    try:
-                        send_to_telegram(sender, text, photos, documents)
-                    except Exception as e:
-                        print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
-                    last_id = msg["id"]
-                    save_last_id(last_id)
-
+            send_to_telegram(sender, text, photos, documents)
         except Exception as e:
-            print(f"Ошибка: {e}", flush=True)
-
-        time.sleep(POLL_INTERVAL)
-
+            print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
+        last_id = msg["id"]
+        save_last_id(last_id)
+         
+    if not new_messages:
+        print("Новых сообщений нет.", flush=True)
 
 if __name__ == "__main__":
     main()
