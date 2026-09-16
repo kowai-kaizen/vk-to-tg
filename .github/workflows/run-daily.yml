@@ -2,6 +2,7 @@ name: VktoTG
 
 on:
   workflow_dispatch:      # позволяет запустить вручную из вкладки Actions
+  push:
 #  schedule:
  #   - cron: '*/5 * * * *'
 
