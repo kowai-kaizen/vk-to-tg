@@ -41,7 +41,7 @@ except ImportError:
 
 # ---------- НАСТРОЙКИ ----------
 
-VK_PEER_ID = 2000000001                 # peer_id беседы (2000000000 + chat_id)
+VK_PEER_ID = 2000000044                 # peer_id беседы (2000000000 + chat_id)
 VK_GROUP_ID = os.getenv("VK_GROUP_ID", "0")  # числовой ID сообщества (положительный)
 VK_API_VERSION = "5.199"
 VK_TOKEN = os.getenv("VK_TOKEN")
@@ -85,7 +85,7 @@ def get_longpoll_server():
 def poll_updates(server, key, ts, wait=5):
     """Один короткий опрос LongPoll-сервера. mode=2 включает attachments."""
     params = {"act": "a_check", "key": key, "ts": ts, "wait": wait, "mode": 2, "version": 3}
-    resp = requests.get(server, params=params, timeout=wait + 10).json()
+    resp = requests.get(server, params=params, timeout=wait + 25).json()
     return resp
 
 
