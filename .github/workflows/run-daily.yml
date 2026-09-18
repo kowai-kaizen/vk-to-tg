@@ -2,9 +2,13 @@ name: VktoTG
 
 on:
   workflow_dispatch:      # позволяет запустить вручную из вкладки Actions
+    inputs:
+      some_input:
+        required: false
+      
 # push:
-  schedule:
-    - cron: '*/20 * * * *'
+#  schedule:
+#    - cron: '*/20 * * * *'
 
 # не даём двум запускам работать одновременно, если предыдущий ещё не завершился
 concurrency:
