@@ -42,7 +42,7 @@ except ImportError:
 # ---------- НАСТРОЙКИ ----------
 
 VK_PEER_ID = 2000000046                   # peer_id беседы (2000000000 + chat_id)
-VK_GROUP_ID = os.getenv("VK_GROUP_ID")  # числовой ID сообщества (положительный)
+VK_GROUP_ID = int(os.getenv("VK_GROUP_ID", "0"))  # числовой ID сообщества (положительный)
 VK_API_VERSION = "5.199"
 VK_TOKEN = os.getenv("VK_TOKEN")
 
@@ -262,9 +262,11 @@ def main():
     print(f"Получено событий: {len(updates)}", flush=True)
 
     for update in updates:
+        print(f"Событие: type={update.get('type')}", flush=True)
         if update.get("type") != "message_new":
             continue
         msg = update["object"]["message"]
+        print(f"  peer_id={msg.get('peer_id')} (ожидаем {VK_PEER_ID}), out={msg.get('out')}", flush=True)
         if msg.get("peer_id") != VK_PEER_ID:
             continue  # событие из другого диалога/беседы, не наше
         if msg.get("out"):
