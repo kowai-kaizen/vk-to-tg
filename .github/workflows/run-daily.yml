@@ -6,7 +6,7 @@ on:
       some_input:
         required: false
       
-# push:
+  push:
 #  schedule:
 #    - cron: '*/20 * * * *'
 
