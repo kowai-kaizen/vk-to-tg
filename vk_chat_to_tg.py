@@ -2,10 +2,26 @@
 Пересылка НОВЫХ сообщений из групповой беседы ВКонтакте в чат/канал Telegram.
 
 Версия для запуска по расписанию (cron / GitHub Actions): скрипт делает ОДНУ
-проверку и завершается — сам цикл ожидания обеспечивает cron в workflow, а не
-скрипт. Состояние (id последнего пересланного сообщения) сохраняется в файл
-last_message_id.json, который в GitHub Actions нужно коммитить обратно в
-репозиторий между запусками (см. соответствующий шаг в workflow).
+короткую проверку через Bot Long Poll API и завершается — сам цикл ожидания
+обеспечивает cron в workflow, а не скрипт.
+
+ВАЖНО: messages.getHistory для ключа сообщества в беседах всегда возвращает
+"Access denied" — это ограничение VK, а не баг. Поэтому вместо получения
+истории мы подписываемся на события через groups.getLongPollServer и
+опрашиваем сервер LongPoll: он отдаёт только то, что произошло после
+сохранённого курсора `ts`.
+
+Состояние (курсор ts) сохраняется в файл last_ts.json, который в GitHub
+Actions нужно коммитить обратно в репозиторий между запусками (см.
+соответствующий шаг в workflow).
+
+Требования на стороне VK:
+  1. Сообщество должно быть добавлено участником в нужную беседу, с доступом
+     ко всей переписке.
+  2. В настройках сообщества: Сообщения -> "Сообщения сообщества" включены.
+  3. Там же: "Настройки для бота" -> "Возможности ботов" включены, способ
+     обработки событий — Long Poll API.
+  4. Ключ доступа создан с правом "Сообщения сообщества" (messages).
 
 Установка зависимостей:
     pip install requests python-dotenv --break-system-packages
@@ -26,6 +42,7 @@ except ImportError:
 # ---------- НАСТРОЙКИ ----------
 
 VK_PEER_ID = 2000000046                   # peer_id беседы (2000000000 + chat_id)
+VK_GROUP_ID = int(os.getenv("VK_GROUP_ID", "0"))  # числовой ID сообщества (положительный)
 VK_API_VERSION = "5.199"
 VK_TOKEN = os.getenv("VK_TOKEN")
 
@@ -33,23 +50,23 @@ TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TG_TOPIC_ID = 14                          # id топика (темы) в группе; None, если топики не используются
 
-STATE_FILE = "last_message_id.json"       # тут храним id последнего отправленного сообщения
+STATE_FILE = "last_ts.json"               # тут храним курсор ts LongPoll
 
 # --------------------------------
 
 _name_cache = {}
 
 
-def load_last_id():
+def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
-            return json.load(f).get("last_id")
-    return None
+            return json.load(f)
+    return {}
 
 
-def save_last_id(msg_id):
+def save_state(state):
     with open(STATE_FILE, "w") as f:
-        json.dump({"last_id": msg_id}, f)
+        json.dump(state, f)
 
 
 def vk_call(method, **params):
@@ -60,9 +77,16 @@ def vk_call(method, **params):
     return resp["response"]
 
 
-def get_messages(count=20):
-    resp = vk_call("messages.getHistory", peer_id=VK_PEER_ID, count=count)
-    return resp["items"]
+def get_longpoll_server():
+    """Возвращает свежие server/key/ts для сообщества."""
+    return vk_call("groups.getLongPollServer", group_id=VK_GROUP_ID)
+
+
+def poll_updates(server, key, ts, wait=5):
+    """Один короткий опрос LongPoll-сервера. mode=2 включает attachments."""
+    params = {"act": "a_check", "key": key, "ts": ts, "wait": wait, "mode": 2, "version": 3}
+    resp = requests.get(server, params=params, timeout=wait + 10).json()
+    return resp
 
 
 def get_sender_name(from_id):
@@ -192,37 +216,62 @@ def send_to_telegram(sender, text, photo_urls, documents):
         _check_tg_response(resp)
 
 
+def process_message(msg):
+    sender = get_sender_name(msg["from_id"])
+    text = msg.get("text", "")
+    photos = extract_photo_urls(msg)
+    documents = extract_documents(msg)
+    print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
+    try:
+        send_to_telegram(sender, text, photos, documents)
+    except Exception as e:
+        print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
+
+
 def main():
-    print("Проверка новых сообщений VK-беседы...", flush=True)
-    last_id = load_last_id()
+    if not VK_GROUP_ID:
+        raise RuntimeError("Не задан VK_GROUP_ID (числовой ID сообщества, положительный)")
 
-    messages = get_messages(count=20)
-    messages.sort(key=lambda m: m["id"])
-    print(f"Получено сообщений от VK API: {len(messages)}", flush=True)
+    print("Запрашиваю сервер LongPoll...", flush=True)
+    server_info = get_longpoll_server()
+    server, key = server_info["server"], server_info["key"]
 
-    if last_id is None:
-        if messages:
-            last_id = messages[-1]["id"]
-            save_last_id(last_id)
-            print(f"Инициализация: последнее сообщение #{last_id}, ждём новые...", flush=True)
-        return
+    state = load_state()
+    ts = state.get("ts") or server_info["ts"]
 
-    new_messages = [m for m in messages if m["id"] > last_id]
-    for msg in new_messages:
-        sender = get_sender_name(msg["from_id"])
-        text = msg.get("text", "")
-        photos = extract_photo_urls(msg)
-        documents = extract_documents(msg)
-        print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
-        try:
-            send_to_telegram(sender, text, photos, documents)
-        except Exception as e:
-            print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
-        last_id = msg["i5d"]
-        save_last_id(last_id)
+    print("Проверка новых событий VK...", flush=True)
+    resp = poll_updates(server, key, ts, wait=5)
 
-    if not new_messages:
-        print("Новых сообщений нет.", flush=True)
+    if "failed" in resp:
+        code = resp["failed"]
+        if code == 1:
+            # ts устарел, но сервер прислал новый — сохраняем и выходим,
+            # события за этот промежуток уже потеряны (короткий разрыв)
+            save_state({"ts": resp["ts"]})
+            print("ts был немного устаревшим, синхронизировался заново.", flush=True)
+            return
+        else:
+            # code 2 (история устарела) или 3 (ключ истёк) — берём всё заново
+            print(f"LongPoll вернул failed={code}, запрашиваю новый сервер/ключ.", flush=True)
+            server_info = get_longpoll_server()
+            save_state({"ts": server_info["ts"]})
+            return
+
+    new_ts = resp["ts"]
+    updates = resp.get("updates", [])
+    print(f"Получено событий: {len(updates)}", flush=True)
+
+    for update in updates:
+        if update.get("type") != "message_new":
+            continue
+        msg = update["object"]["message"]
+        if msg.get("peer_id") != VK_PEER_ID:
+            continue  # событие из другого диалога/беседы, не наше
+        if msg.get("out"):
+            continue  # исходящее сообщение (отправлено самим сообществом) — пропускаем
+        process_message(msg)
+
+    save_state({"ts": new_ts})
 
 
 if __name__ == "__main__":
