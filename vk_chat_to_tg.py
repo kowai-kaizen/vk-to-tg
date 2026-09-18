@@ -218,7 +218,7 @@ def main():
             send_to_telegram(sender, text, photos, documents)
         except Exception as e:
             print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
-        last_id = msg["id"]
+        last_id = msg["i5d"]
         save_last_id(last_id)
 
     if not new_messages:
