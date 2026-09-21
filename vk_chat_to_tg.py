@@ -41,7 +41,7 @@ except ImportError:
 
 # ---------- НАСТРОЙКИ ----------
     
-VK_PEER_ID = 2000000044                 # peer_id беседы (2000000000 + chat_id)
+VK_PEER_ID = 2000000002                 # peer_id беседы (2000000000 + chat_id)
 VK_GROUP_ID = os.getenv("VK_GROUP_ID", "0")  # числовой ID сообщества (положительный)
 VK_API_VERSION = "5.199"
 VK_TOKEN = os.getenv("VK_TOKEN")
