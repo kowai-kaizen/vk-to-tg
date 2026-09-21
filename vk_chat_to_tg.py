@@ -50,7 +50,7 @@ TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 TG_TOPIC_ID = 4607                          # id топика (темы) в группе; None, если топики не используются
 
-STATE_FILE = "last_ts.json"               # тут храним курсор ts LongPoll
+STATE_FILE = os.getenv("STATE_FILE", "last_ts.json")               # тут храним курсор ts LongPoll
 
 # --------------------------------
 
