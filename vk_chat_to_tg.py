@@ -40,7 +40,7 @@ except ImportError:
     pass  # в GitHub Actions переменные окружения приходят из workflow, .env не нужен
 
 # ---------- НАСТРОЙКИ ----------
-
+    
 VK_PEER_ID = 2000000044                 # peer_id беседы (2000000000 + chat_id)
 VK_GROUP_ID = os.getenv("VK_GROUP_ID", "0")  # числовой ID сообщества (положительный)
 VK_API_VERSION = "5.199"
