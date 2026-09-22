@@ -214,19 +214,40 @@ def send_to_telegram(sender, text, photo_urls, documents):
         data.update({"text": caption})
         resp = requests.post(f"{base}/sendMessage", data=data, timeout=15)
         _check_tg_response(resp)
-
+      
+def collect_fwd_messages(msg):
+    """Рекурсивно собирает все пересланные/цитируемые сообщения, включая вложенные пересылки."""
+    result = []
+    if msg.get("reply_message"):
+        result.append(msg["reply_message"])
+        result.extend(collect_fwd_messages(msg["reply_message"]))
+    for fwd in msg.get("fwd_messages", []):
+        result.append(fwd)
+        result.extend(collect_fwd_messages(fwd))
+    return result
 
 def process_message(msg):
     sender = get_sender_name(msg["from_id"])
     text = msg.get("text", "")
     photos = extract_photo_urls(msg)
     documents = extract_documents(msg)
+
+    fwd_list = collect_fwd_messages(msg)
+    if fwd_list:
+        fwd_lines = []
+        for fwd in fwd_list:
+            fwd_sender = get_sender_name(fwd["from_id"])
+            fwd_text = fwd.get("text", "")
+            fwd_lines.append(f"[переслано от {fwd_sender}]: {fwd_text}" if fwd_text else f"[переслано от {fwd_sender}]")
+            photos.extend(extract_photo_urls(fwd))
+            documents.extend(extract_documents(fwd))
+        text = (text + "\n\n" + "\n".join(fwd_lines)).strip() if text else "\n".join(fwd_lines)
+
     print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
     try:
         send_to_telegram(sender, text, photos, documents)
     except Exception as e:
         print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
-
 
 def main():
     if not VK_GROUP_ID:
