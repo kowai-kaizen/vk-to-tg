@@ -56,6 +56,25 @@ STATE_FILE = os.getenv("STATE_FILE", "last_ts.json")               # тут хр
 
 _name_cache = {}
 
+def extract_wall_posts(msg):
+    """Извлекает пересланные посты со стены (attachments type=wall)."""
+    posts = []
+    for att in msg.get("attachments", []):
+        if att.get("type") == "wall":
+            wall = att["wall"]
+            owner_id = wall.get("owner_id")
+            post_id = wall.get("id")
+            text = wall.get("text", "")
+            link = f"https://vk.com/wall{owner_id}_{post_id}"
+            photos = []
+            for sub_att in wall.get("attachments", []):
+                if sub_att.get("type") == "photo":
+                    sizes = sub_att["photo"].get("sizes", [])
+                    if sizes:
+                        best = max(sizes, key=lambda s: s.get("width", 0))
+                        photos.append(best["url"])
+            posts.append({"text": text, "link": link, "photos": photos})
+    return posts
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -233,6 +252,17 @@ def process_message(msg):
     documents = extract_documents(msg)
 
     fwd_list = collect_fwd_messages(msg)
+    all_msgs_for_walls = [msg] + fwd_list  # посты бывают и внутри пересланных сообщений
+
+    wall_lines = []
+    for m in all_msgs_for_walls:
+        for post in extract_wall_posts(m):
+            line = f"[пост со стены] {post['link']}"
+            if post["text"]:
+                line += f"\n{post['text']}"
+            wall_lines.append(line)
+            photos.extend(post["photos"])
+
     if fwd_list:
         fwd_lines = []
         for fwd in fwd_list:
@@ -242,6 +272,9 @@ def process_message(msg):
             photos.extend(extract_photo_urls(fwd))
             documents.extend(extract_documents(fwd))
         text = (text + "\n\n" + "\n".join(fwd_lines)).strip() if text else "\n".join(fwd_lines)
+
+    if wall_lines:
+        text = (text + "\n\n" + "\n\n".join(wall_lines)).strip() if text else "\n\n".join(wall_lines)
 
     print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
     try:
