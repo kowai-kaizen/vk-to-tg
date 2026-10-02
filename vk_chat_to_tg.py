@@ -295,6 +295,7 @@ def process_message(msg):
             fwd_lines.append(f"[переслано от {fwd_sender}]: {fwd_text}" if fwd_text else f"[переслано от {fwd_sender}]")
             photos.extend(extract_photo_urls(fwd))
             documents.extend(extract_documents(fwd))
+            voices.extend(extract_voice_messages(fwd))
         text = (text + "\n\n" + "\n".join(fwd_lines)).strip() if text else "\n".join(fwd_lines)
 
     if wall_lines:
