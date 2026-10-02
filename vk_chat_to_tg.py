@@ -56,6 +56,51 @@ STATE_FILE = os.getenv("STATE_FILE", "last_ts.json")               # тут хр
 
 _name_cache = {}
 
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def vk_call(method, **params):
+    params.update({"access_token": VK_TOKEN, "v": VK_API_VERSION})
+    resp = requests.get(f"https://api.vk.com/method/{method}", params=params, timeout=15).json()
+    if "error" in resp:
+        raise RuntimeError(f"Ошибка VK API ({method}): {resp['error']}")
+    return resp["response"]
+
+def poll_updates(server, key, ts, wait=5):
+    """Один короткий опрос LongPoll-сервера. mode=2 включает attachments."""
+    params = {"act": "a_check", "key": key, "ts": ts, "wait": wait, "mode": 2, "version": 3}
+    resp = requests.get(server, params=params, timeout=wait + 25).json()
+    return resp
+
+def get_longpoll_server():
+    """Возвращает свежие server/key/ts для сообщества."""
+    return vk_call("groups.getLongPollServer", group_id=VK_GROUP_ID)
+
+def get_sender_name(from_id):
+    if from_id in _name_cache:
+        return _name_cache[from_id]
+    time.sleep(1)
+    try:
+        if from_id > 0:
+            resp = vk_call("users.get", user_ids=from_id)
+            name = f"{resp[0]['first_name']} {resp[0]['last_name']}"
+        else:
+            resp = vk_call("groups.getById", group_id=-from_id)
+            name = resp[0]["name"] if isinstance(resp, list) else resp["groups"][0]["name"]
+    except Exception:
+        name = f"id{from_id}"
+    _name_cache[from_id] = name
+    return name
+
 def extract_wall_posts(msg):
     """Извлекает пересланные посты со стены (attachments type=wall)."""
     posts = []
@@ -76,53 +121,14 @@ def extract_wall_posts(msg):
             posts.append({"text": text, "link": link, "photos": photos})
     return posts
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-
-def vk_call(method, **params):
-    params.update({"access_token": VK_TOKEN, "v": VK_API_VERSION})
-    resp = requests.get(f"https://api.vk.com/method/{method}", params=params, timeout=15).json()
-    if "error" in resp:
-        raise RuntimeError(f"Ошибка VK API ({method}): {resp['error']}")
-    return resp["response"]
-
-
-def get_longpoll_server():
-    """Возвращает свежие server/key/ts для сообщества."""
-    return vk_call("groups.getLongPollServer", group_id=VK_GROUP_ID)
-
-
-def poll_updates(server, key, ts, wait=5):
-    """Один короткий опрос LongPoll-сервера. mode=2 включает attachments."""
-    params = {"act": "a_check", "key": key, "ts": ts, "wait": wait, "mode": 2, "version": 3}
-    resp = requests.get(server, params=params, timeout=wait + 25).json()
-    return resp
-
-
-def get_sender_name(from_id):
-    if from_id in _name_cache:
-        return _name_cache[from_id]
-    time.sleep(1)
-    try:
-        if from_id > 0:
-            resp = vk_call("users.get", user_ids=from_id)
-            name = f"{resp[0]['first_name']} {resp[0]['last_name']}"
-        else:
-            resp = vk_call("groups.getById", group_id=-from_id)
-            name = resp[0]["name"] if isinstance(resp, list) else resp["groups"][0]["name"]
-    except Exception:
-        name = f"id{from_id}"
-    _name_cache[from_id] = name
-    return name
+def extract_voice_messages(msg):
+    voices = []
+    for att in msg.get("attachments", []):
+        if att.get("type") == "audio_message":
+            url = att["audio_message"].get("link_ogg")
+            if url:
+                voices.append(url)
+    return voices
 
 
 def extract_photo_urls(msg):
@@ -181,8 +187,24 @@ def _post_with_retry(url, data, files, attempts=3, timeout=180):
             time.sleep(3)
     raise last_error
 
+def send_voices(caption, voice_urls, caption_used):
+    base = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
+    for url in voice_urls:
+        data = _base_data()
+        if not caption_used:
+            data["caption"] = caption
+            caption_used = True
+        try:
+            files = {"voice": ("voice.ogg", _download(url))}
+        except Exception as e:
+            print(f"Не удалось скачать голосовое: {e}", flush=True)
+            continue
+        resp = _post_with_retry(f"{base}/sendVoice", data, files)
+        _check_tg_response(resp)
+    return caption_used
 
 def send_to_telegram(sender, text, photo_urls, documents):
+    voice_urls = voice_urls or []
     base = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
     caption = f"{sender}:\n{text}" if text.strip() else f"{sender}:"
     caption_used = False
@@ -214,7 +236,9 @@ def send_to_telegram(sender, text, photo_urls, documents):
                 resp = _post_with_retry(f"{base}/sendMediaGroup", data, files)
                 _check_tg_response(resp)
         caption_used = True
-
+      
+    caption_used = send_voices(caption, voice_urls, caption_used)
+  
     for url, filename in documents:
         data = _base_data()
         if not caption_used:
@@ -250,7 +274,7 @@ def process_message(msg):
     text = msg.get("text", "")
     photos = extract_photo_urls(msg)
     documents = extract_documents(msg)
-
+    voices = extract_voice_messages(msg)
     fwd_list = collect_fwd_messages(msg)
     all_msgs_for_walls = [msg] + fwd_list  # посты бывают и внутри пересланных сообщений
 
@@ -278,7 +302,7 @@ def process_message(msg):
 
     print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
     try:
-        send_to_telegram(sender, text, photos, documents)
+        send_to_telegram(sender, text, photos, documents, voices)
     except Exception as e:
         print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
 
