@@ -203,7 +203,7 @@ def send_voices(caption, voice_urls, caption_used):
         _check_tg_response(resp)
     return caption_used
 
-def send_to_telegram(sender, text, photo_urls, documents, voices):
+def send_to_telegram(sender, text, photo_urls, documents, voice_urls=None):
     voice_urls = voice_urls or []
     base = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
     caption = f"{sender}:\n{text}" if text.strip() else f"{sender}:"
