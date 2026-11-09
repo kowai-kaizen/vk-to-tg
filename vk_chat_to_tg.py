@@ -41,20 +41,37 @@ except ImportError:
 
 # ---------- НАСТРОЙКИ ----------
     
-VK_PEER_ID = 2000000002                 # peer_id беседы (2000000000 + chat_id)
-VK_GROUP_ID = os.getenv("VK_GROUP_ID", "0")  # числовой ID сообщества (положительный)
+
+
 VK_API_VERSION = "5.199"
-VK_TOKEN = os.getenv("VK_TOKEN")
-
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-TG_CHAT_ID = os.getenv("TG_CHAT_ID")
-TG_TOPIC_ID = 4607                          # id топика (темы) в группе; None, если топики не используются
-
 STATE_FILE = os.getenv("STATE_FILE", "last_ts.json")               # тут храним курсор ts LongPoll
 
+
+
+
+COMMUNITIES = [
+    {
+        "name": "Группа 1",
+        "group_id": os.getenv("VK_GROUP_ID"),
+        "token": os.getenv("VK_TOKEN"),
+        "peer_id": 2000000002,
+        "tg_chat_id": os.getenv("TG_CHAT_ID"),
+        "tg_topic_id": 4607,
+    },
+    {
+        "name": "Группа 2",
+        "group_id": os.getenv("VK_GROUP_ID_2"),
+        "token": os.getenv("VK_TOKEN"),
+        "peer_id": 2000000003,          # поменяйте на peer_id нужной беседы
+        "tg_chat_id": os.getenv("TG_CHAT_ID_2"),
+        "tg_topic_id": None,
+    },
+]
 # --------------------------------
 
 _name_cache = {}
+
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -68,58 +85,63 @@ def save_state(state):
         json.dump(state, f)
 
 
-def vk_call(method, **params):
-    params.update({"access_token": VK_TOKEN, "v": VK_API_VERSION})
+def vk_call(token, method, **params):
+    params.update({"access_token": token, "v": VK_API_VERSION})
     resp = requests.get(f"https://api.vk.com/method/{method}", params=params, timeout=15).json()
     if "error" in resp:
         raise RuntimeError(f"Ошибка VK API ({method}): {resp['error']}")
     return resp["response"]
 
+
 def poll_updates(server, key, ts, wait=5):
-    """Один короткий опрос LongPoll-сервера. mode=2 включает attachments."""
     params = {"act": "a_check", "key": key, "ts": ts, "wait": wait, "mode": 2, "version": 3}
-    resp = requests.get(server, params=params, timeout=wait + 25).json()
-    return resp
+    return requests.get(server, params=params, timeout=wait + 25).json()
 
-def get_longpoll_server():
-    """Возвращает свежие server/key/ts для сообщества."""
-    return vk_call("groups.getLongPollServer", group_id=VK_GROUP_ID)
 
-def get_sender_name(from_id):
-    if from_id in _name_cache:
-        return _name_cache[from_id]
+def get_longpoll_server(cfg):
+    return vk_call(cfg["token"], "groups.getLongPollServer", group_id=cfg["group_id"])
+
+
+def get_sender_name(token, from_id):
+    cache_key = (token, from_id)
+    if cache_key in _name_cache:
+        return _name_cache[cache_key]
     time.sleep(1)
     try:
         if from_id > 0:
-            resp = vk_call("users.get", user_ids=from_id)
+            resp = vk_call(token, "users.get", user_ids=from_id)
             name = f"{resp[0]['first_name']} {resp[0]['last_name']}"
         else:
-            resp = vk_call("groups.getById", group_id=-from_id)
+            resp = vk_call(token, "groups.getById", group_id=-from_id)
             name = resp[0]["name"] if isinstance(resp, list) else resp["groups"][0]["name"]
     except Exception:
         name = f"id{from_id}"
-    _name_cache[from_id] = name
+    _name_cache[cache_key] = name
     return name
 
+
+def _best_photo_url(photo):
+    sizes = photo.get("sizes", [])
+    if sizes:
+        return max(sizes, key=lambda s: s.get("width", 0))["url"]
+    return None
+
+
 def extract_wall_posts(msg):
-    """Извлекает пересланные посты со стены (attachments type=wall)."""
     posts = []
     for att in msg.get("attachments", []):
         if att.get("type") == "wall":
             wall = att["wall"]
-            owner_id = wall.get("owner_id")
-            post_id = wall.get("id")
-            text = wall.get("text", "")
-            link = f"https://vk.com/wall{owner_id}_{post_id}"
+            link = f"https://vk.com/wall{wall.get('owner_id')}_{wall.get('id')}"
             photos = []
             for sub_att in wall.get("attachments", []):
                 if sub_att.get("type") == "photo":
-                    sizes = sub_att["photo"].get("sizes", [])
-                    if sizes:
-                        best = max(sizes, key=lambda s: s.get("width", 0))
-                        photos.append(best["url"])
-            posts.append({"text": text, "link": link, "photos": photos})
+                    url = _best_photo_url(sub_att["photo"])
+                    if url:
+                        photos.append(url)
+            posts.append({"text": wall.get("text", ""), "link": link, "photos": photos})
     return posts
+
 
 def extract_voice_messages(msg):
     voices = []
@@ -135,10 +157,9 @@ def extract_photo_urls(msg):
     urls = []
     for att in msg.get("attachments", []):
         if att.get("type") == "photo":
-            sizes = att["photo"].get("sizes", [])
-            if sizes:
-                best = max(sizes, key=lambda s: s.get("width", 0))
-                urls.append(best["url"])
+            url = _best_photo_url(att["photo"])
+            if url:
+                urls.append(url)
     return urls
 
 
@@ -163,10 +184,10 @@ def _check_tg_response(resp):
             print(f"ОШИБКА ОТ TELEGRAM: {data}", flush=True)
 
 
-def _base_data():
-    data = {"chat_id": TG_CHAT_ID}
-    if TG_TOPIC_ID is not None:
-        data["message_thread_id"] = TG_TOPIC_ID
+def _base_data(cfg):
+    data = {"chat_id": cfg["tg_chat_id"]}
+    if cfg.get("tg_topic_id") is not None:
+        data["message_thread_id"] = cfg["tg_topic_id"]
     return data
 
 
@@ -187,10 +208,11 @@ def _post_with_retry(url, data, files, attempts=3, timeout=180):
             time.sleep(3)
     raise last_error
 
-def send_voices(caption, voice_urls, caption_used):
+
+def send_voices(cfg, caption, voice_urls, caption_used):
     base = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
     for url in voice_urls:
-        data = _base_data()
+        data = _base_data(cfg)
         if not caption_used:
             data["caption"] = caption
             caption_used = True
@@ -203,16 +225,16 @@ def send_voices(caption, voice_urls, caption_used):
         _check_tg_response(resp)
     return caption_used
 
-def send_to_telegram(sender, text, photo_urls, documents, voice_urls=None):
-    voice_urls = voice_urls or []
+
+def send_to_telegram(cfg, sender, text, photo_urls, documents, voice_urls):
     base = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
     caption = f"{sender}:\n{text}" if text.strip() else f"{sender}:"
     caption_used = False
 
     if photo_urls:
         if len(photo_urls) == 1:
-            data = _base_data()
-            data.update({"caption": caption})
+            data = _base_data(cfg)
+            data["caption"] = caption
             files = {"photo": ("photo.jpg", _download(photo_urls[0]))}
             resp = _post_with_retry(f"{base}/sendPhoto", data, files)
             _check_tg_response(resp)
@@ -227,20 +249,20 @@ def send_to_telegram(sender, text, photo_urls, documents, voice_urls=None):
                     print(f"Не удалось скачать фото {i + 1}: {e}", flush=True)
                     continue
                 item = {"type": "photo", "media": f"attach://{key}"}
-                if i == 0:
+                if not media:
                     item["caption"] = caption
                 media.append(item)
             if media:
-                data = _base_data()
-                data.update({"media": json.dumps(media)})
+                data = _base_data(cfg)
+                data["media"] = json.dumps(media)
                 resp = _post_with_retry(f"{base}/sendMediaGroup", data, files)
                 _check_tg_response(resp)
         caption_used = True
-      
-    caption_used = send_voices(caption, voice_urls, caption_used)
-  
+
+    caption_used = send_voices(cfg, caption, voice_urls, caption_used)
+
     for url, filename in documents:
-        data = _base_data()
+        data = _base_data(cfg)
         if not caption_used:
             data["caption"] = caption
             caption_used = True
@@ -253,13 +275,13 @@ def send_to_telegram(sender, text, photo_urls, documents, voice_urls=None):
         _check_tg_response(resp)
 
     if not caption_used:
-        data = _base_data()
-        data.update({"text": caption})
+        data = _base_data(cfg)
+        data["text"] = caption
         resp = requests.post(f"{base}/sendMessage", data=data, timeout=15)
         _check_tg_response(resp)
-      
+
+
 def collect_fwd_messages(msg):
-    """Рекурсивно собирает все пересланные/цитируемые сообщения, включая вложенные пересылки."""
     result = []
     if msg.get("reply_message"):
         result.append(msg["reply_message"])
@@ -269,17 +291,18 @@ def collect_fwd_messages(msg):
         result.extend(collect_fwd_messages(fwd))
     return result
 
-def process_message(msg):
-    sender = get_sender_name(msg["from_id"])
+
+def process_message(cfg, msg):
+    token = cfg["token"]
+    sender = get_sender_name(token, msg["from_id"])
     text = msg.get("text", "")
     photos = extract_photo_urls(msg)
     documents = extract_documents(msg)
     voices = extract_voice_messages(msg)
     fwd_list = collect_fwd_messages(msg)
-    all_msgs_for_walls = [msg] + fwd_list  # посты бывают и внутри пересланных сообщений
 
     wall_lines = []
-    for m in all_msgs_for_walls:
+    for m in [msg] + fwd_list:
         for post in extract_wall_posts(m):
             line = f"[пост со стены] {post['link']}"
             if post["text"]:
@@ -290,7 +313,7 @@ def process_message(msg):
     if fwd_list:
         fwd_lines = []
         for fwd in fwd_list:
-            fwd_sender = get_sender_name(fwd["from_id"])
+            fwd_sender = get_sender_name(token, fwd["from_id"])
             fwd_text = fwd.get("text", "")
             fwd_lines.append(f"[переслано от {fwd_sender}]: {fwd_text}" if fwd_text else f"[переслано от {fwd_sender}]")
             photos.extend(extract_photo_urls(fwd))
@@ -301,58 +324,66 @@ def process_message(msg):
     if wall_lines:
         text = (text + "\n\n" + "\n\n".join(wall_lines)).strip() if text else "\n\n".join(wall_lines)
 
-    print(f"Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
+    print(f"[{cfg['name']}] Пересылаю сообщение #{msg['id']} от {sender}", flush=True)
     try:
-        send_to_telegram(sender, text, photos, documents, voices)
+        send_to_telegram(cfg, sender, text, photos, documents, voices)
     except Exception as e:
-        print(f"Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю его.", flush=True)
+        print(f"[{cfg['name']}] Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю.", flush=True)
 
-def main():
-    if not VK_GROUP_ID:
-        raise RuntimeError("Не задан VK_GROUP_ID (числовой ID сообщества, положительный)")
 
-    print("Запрашиваю сервер LongPoll...", flush=True)
-    server_info = get_longpoll_server()
+def run_community(cfg, state):
+    """Одна проверка для одного сообщества. Курсор хранится в state[group_id]."""
+    name = cfg["name"]
+    gid = str(cfg["group_id"])
+
+    print(f"[{name}] Запрашиваю сервер LongPoll...", flush=True)
+    server_info = get_longpoll_server(cfg)
     server, key = server_info["server"], server_info["key"]
 
-    state = load_state()
-    ts = state.get("ts") or server_info["ts"]
+    ts = state.get(gid) or server_info["ts"]
 
-    print("Проверка новых событий VK...", flush=True)
+    print(f"[{name}] Проверка новых событий VK...", flush=True)
     resp = poll_updates(server, key, ts, wait=5)
 
     if "failed" in resp:
         code = resp["failed"]
         if code == 1:
-            # ts устарел, но сервер прислал новый — сохраняем и выходим,
-            # события за этот промежуток уже потеряны (короткий разрыв)
-            save_state({"ts": resp["ts"]})
-            print("ts был немного устаревшим, синхронизировался заново.", flush=True)
+            state[gid] = resp["ts"]
+            print(f"[{name}] ts был немного устаревшим, синхронизировался заново.", flush=True)
             return
-        else:
-            # code 2 (история устарела) или 3 (ключ истёк) — берём всё заново
-            print(f"LongPoll вернул failed={code}, запрашиваю новый сервер/ключ.", flush=True)
-            server_info = get_longpoll_server()
-            save_state({"ts": server_info["ts"]})
-            return
+        print(f"[{name}] LongPoll вернул failed={code}, беру новый сервер/ключ.", flush=True)
+        state[gid] = get_longpoll_server(cfg)["ts"]
+        return
 
-    new_ts = resp["ts"]
     updates = resp.get("updates", [])
-    print(f"Получено событий: {len(updates)}", flush=True)
+    print(f"[{name}] Получено событий: {len(updates)}", flush=True)
 
     for update in updates:
-        print(f"Событие: type={update.get('type')}", flush=True)
         if update.get("type") != "message_new":
             continue
         msg = update["object"]["message"]
-        print(f"  peer_id={msg.get('peer_id')} (ожидаем {VK_PEER_ID}), out={msg.get('out')}", flush=True)
-        if msg.get("peer_id") != VK_PEER_ID:
-            continue  # событие из другого диалога/беседы, не наше
+        if cfg.get("peer_id") is not None and msg.get("peer_id") != cfg["peer_id"]:
+            continue
         if msg.get("out"):
-            continue  # исходящее сообщение (отправлено самим сообществом) — пропускаем
-        process_message(msg)
+            continue
+        process_message(cfg, msg)
 
-    save_state({"ts": new_ts})
+    state[gid] = resp["ts"]
+
+
+def main():
+    state = load_state()
+
+    for cfg in COMMUNITIES:
+        if not (cfg.get("group_id") and cfg.get("token") and cfg.get("tg_chat_id")):
+            print(f"[{cfg['name']}] Не заданы group_id / token / tg_chat_id, пропускаю.", flush=True)
+            continue
+        try:
+            run_community(cfg, state)
+        except Exception as e:
+            # сбой одного сообщества не должен мешать остальным
+            print(f"[{cfg['name']}] Ошибка: {e}", flush=True)
+        save_state(state)  # сохраняем после каждого, чтобы не потерять курсор
 
 
 if __name__ == "__main__":
@@ -360,5 +391,3 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"Ошибка: {e}", flush=True)
-        # завершаемся без ошибки — временный сбой (например, flood control)
-        # не должен считаться падением workflow, просто попробуем в следующий раз
