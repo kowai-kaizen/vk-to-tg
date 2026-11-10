@@ -330,42 +330,44 @@ def process_message(cfg, msg):
     except Exception as e:
         print(f"[{cfg['name']}] Не удалось переслать сообщение #{msg['id']}: {e}. Пропускаю.", flush=True)
 
+def run_community(cfgs, state):
+    """Один опрос сообщества, события раскладываются по беседам из cfgs."""
+    first = cfgs[0]
+    gid = str(first["group_id"])
+    routes = {c["peer_id"]: c for c in cfgs}
 
-def run_community(cfg, state):
-    """Одна проверка для одного сообщества. Курсор хранится в state[group_id]."""
-    name = cfg["name"]
-    gid = str(cfg["group_id"])
-
-    print(f"[{name}] Запрашиваю сервер LongPoll...", flush=True)
-    server_info = get_longpoll_server(cfg)
+    print(f"[{gid}] Запрашиваю сервер LongPoll...", flush=True)
+    server_info = get_longpoll_server(first)
     server, key = server_info["server"], server_info["key"]
 
     ts = state.get(gid) or server_info["ts"]
 
-    print(f"[{name}] Проверка новых событий VK...", flush=True)
+    print(f"[{gid}] Проверка новых событий VK...", flush=True)
     resp = poll_updates(server, key, ts, wait=5)
 
     if "failed" in resp:
         code = resp["failed"]
         if code == 1:
             state[gid] = resp["ts"]
-            print(f"[{name}] ts был немного устаревшим, синхронизировался заново.", flush=True)
+            print(f"[{gid}] ts был немного устаревшим, синхронизировался заново.", flush=True)
             return
-        print(f"[{name}] LongPoll вернул failed={code}, беру новый сервер/ключ.", flush=True)
-        state[gid] = get_longpoll_server(cfg)["ts"]
+        print(f"[{gid}] LongPoll вернул failed={code}, беру новый сервер/ключ.", flush=True)
+        state[gid] = get_longpoll_server(first)["ts"]
         return
 
     updates = resp.get("updates", [])
-    print(f"[{name}] Получено событий: {len(updates)}", flush=True)
+    print(f"[{gid}] Получено событий: {len(updates)}", flush=True)
 
     for update in updates:
         if update.get("type") != "message_new":
             continue
         msg = update["object"]["message"]
-        if cfg.get("peer_id") is not None and msg.get("peer_id") != cfg["peer_id"]:
-            continue
+        print(f"  peer_id={msg.get('peer_id')}, out={msg.get('out')}", flush=True)
         if msg.get("out"):
             continue
+        cfg = routes.get(msg.get("peer_id"))
+        if cfg is None:
+            continue  # беседа не из списка
         process_message(cfg, msg)
 
     state[gid] = resp["ts"]
@@ -374,17 +376,20 @@ def run_community(cfg, state):
 def main():
     state = load_state()
 
+    # группируем записи по сообществу, чтобы опрашивать каждое сообщество один раз
+    groups = {}
     for cfg in COMMUNITIES:
         if not (cfg.get("group_id") and cfg.get("token") and cfg.get("tg_chat_id")):
             print(f"[{cfg['name']}] Не заданы group_id / token / tg_chat_id, пропускаю.", flush=True)
             continue
-        try:
-            run_community(cfg, state)
-        except Exception as e:
-            # сбой одного сообщества не должен мешать остальным
-            print(f"[{cfg['name']}] Ошибка: {e}", flush=True)
-        save_state(state)  # сохраняем после каждого, чтобы не потерять курсор
+        groups.setdefault(str(cfg["group_id"]), []).append(cfg)
 
+    for gid, cfgs in groups.items():
+        try:
+            run_community(cfgs, state)
+        except Exception as e:
+            print(f"[{gid}] Ошибка: {e}", flush=True)
+        save_state(state)
 
 if __name__ == "__main__":
     try:
