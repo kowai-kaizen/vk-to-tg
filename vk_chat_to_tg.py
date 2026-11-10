@@ -380,8 +380,10 @@ def main():
     groups = {}
     for cfg in COMMUNITIES:
         if not (cfg.get("group_id") and cfg.get("token") and cfg.get("tg_chat_id")):
-            print(f"[{cfg['name']}] Не заданы group_id / token / tg_chat_id, пропускаю.", flush=True)
-            continue
+            missing = [k for k in ("group_id", "token", "tg_chat_id") if not cfg.get(k)]
+            if missing:
+              print(f"[{cfg['name']}] Не заданы: {', '.join(missing)}, пропускаю.", flush=True)
+              continue
         groups.setdefault(str(cfg["group_id"]), []).append(cfg)
 
     for gid, cfgs in groups.items():
