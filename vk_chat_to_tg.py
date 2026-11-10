@@ -61,11 +61,11 @@ COMMUNITIES = [
     },
     {
         "name": "Группа 2",
-        "group_id": os.getenv("VK_GROUP_ID_2"),
+        "group_id": os.getenv("VK_GROUP_ID"),
         "token": os.getenv("VK_TOKEN"),
         "peer_id": 2000000003,          # поменяйте на peer_id нужной беседы
         "tg_chat_id": os.getenv("TG_CHAT_ID_2"),
-        "tg_topic_id": None,
+        "tg_topic_id": 21825,
     },
 ]
 # --------------------------------
